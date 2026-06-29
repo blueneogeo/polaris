@@ -16,6 +16,19 @@ Polaris acts as an OpenAI-compatible server. You connect your harness (OpenCode,
 
 Not yet implemented: rules engine, LLM judging, memory, `@polaris` communication, OpenCode plugin.
 
+## Documentation
+
+Full documentation is in [docs/](docs/README.md):
+
+| Document | Covers |
+|---|---|
+| [Architecture](docs/architecture.md) | Server structure, proxy pipeline, block system, interfaces |
+| [Commands](docs/commands.md) | User-facing slash commands |
+| [Admin API](docs/admin-api.md) | HTTP API for runtime model/rules management |
+| [Configuration](docs/configuration.md) | Environment variables, model wallet, rules TOML, POLARIS.md |
+| [Rules & Memory](docs/rules-and-memory.md) | How rules and memory work, the distinction, scopes |
+| [Development](docs/development.md) | Project structure, build.sh commands, testing |
+
 ## Quick start
 
 **Prerequisites:** Go, golangci-lint, varlock, fswatch (for watch mode).

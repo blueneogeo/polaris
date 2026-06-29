@@ -13,17 +13,17 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		Port:           envOrDefault("POLARIS_PORT", "8777"),
-		UpstreamURL:    envOrDefault("POLARIS_UPSTREAM_URL", ""),
-		UpstreamAPIKey: envOrDefault("POLARIS_UPSTREAM_API_KEY", ""),
+		Port:           envOrDefault("PORT", "8777"),
+		UpstreamURL:    envOrDefault("UPSTREAM_URL", ""),
+		UpstreamAPIKey: envOrDefault("UPSTREAM_API_KEY", ""),
 	}
 
 	var missing []string
 	if cfg.UpstreamURL == "" {
-		missing = append(missing, "POLARIS_UPSTREAM_URL")
+		missing = append(missing, "UPSTREAM_URL")
 	}
 	if cfg.UpstreamAPIKey == "" {
-		missing = append(missing, "POLARIS_UPSTREAM_API_KEY")
+		missing = append(missing, "UPSTREAM_API_KEY")
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %v", missing)

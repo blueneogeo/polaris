@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,30 +11,35 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/openai/openai-go/v3"
 	"github.com/polaris/internal/config"
 )
 
 // mockUpstream is a test server that simulates an OpenAI-compatible API.
+// It returns properly typed ChatCompletion and ChatCompletionChunk responses.
 type mockUpstream struct {
 	server        *httptest.Server
-	streamChunks  []string      // SSE chunks to return in stream mode
-	nonStreamBody string        // body to return in non-stream mode
-	errorStatus   int           // if > 0, return this error status
-	slowWrite     time.Duration // simulate slow streaming for timeout/latency tests
+	streamChunks  []openai.ChatCompletionChunk // SSE chunks to return in stream mode
+	nonStreamBody string                       // JSON body to return in non-stream mode
+	errorStatus   int                          // if > 0, return this error status
 }
 
 func newMockUpstream(t *testing.T) *mockUpstream {
 	t.Helper()
 	m := &mockUpstream{
-		streamChunks: []string{
-			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello"}}]}`,
-			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"delta":{"content":" world"}}]}`,
-			`data: [DONE]`,
+		streamChunks: []openai.ChatCompletionChunk{
+			{ID: "chatcmpl-1", Model: "test-model", Object: "chat.completion.chunk",
+				Choices: []openai.ChatCompletionChunkChoice{
+					{Index: 0, Delta: openai.ChatCompletionChunkChoiceDelta{Content: "Hello"}},
+				}},
+			{ID: "chatcmpl-1", Model: "test-model", Object: "chat.completion.chunk",
+				Choices: []openai.ChatCompletionChunkChoice{
+					{Index: 0, Delta: openai.ChatCompletionChunkChoiceDelta{Content: " world"}},
+				}},
 		},
-		nonStreamBody: `{"id":"chatcmpl-1","object":"chat.completion","choices":[{"message":{"content":"Hello world"}}]}`,
+		nonStreamBody: `{"id":"chatcmpl-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"Hello world"}}]}`,
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -47,20 +53,20 @@ func newMockUpstream(t *testing.T) *mockUpstream {
 		body, _ := io.ReadAll(r.Body)
 		r.Body.Close()
 
-		var req chatRequest
-		_ = json.Unmarshal(body, &req)
+		var sr streamRequest
+		_ = json.Unmarshal(body, &sr)
 
-		if req.Stream {
+		if sr.Stream {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			flusher := w.(http.Flusher)
 			for _, chunk := range m.streamChunks {
-				if m.slowWrite > 0 {
-					time.Sleep(m.slowWrite)
-				}
-				_, _ = fmt.Fprintln(w, chunk)
+				data, _ := json.Marshal(chunk)
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 				flusher.Flush()
 			}
+			_, _ = fmt.Fprintln(w, "data: [DONE]")
+			flusher.Flush()
 		} else {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -129,19 +135,21 @@ func TestProxy_Streaming_PassesThroughSSEChunks(t *testing.T) {
 		t.Fatalf("read response body: %v", err)
 	}
 
-	for _, chunk := range upstream.streamChunks {
-		if !strings.Contains(string(responseBody), chunk) {
-			t.Errorf("response body missing chunk: %q", chunk)
-		}
+	// Verify both chunks came through
+	if !strings.Contains(string(responseBody), "Hello") {
+		t.Error("response body missing 'Hello' chunk")
+	}
+	if !strings.Contains(string(responseBody), "world") {
+		t.Error("response body missing ' world' chunk")
 	}
 	if !strings.Contains(string(responseBody), "[DONE]") {
-		t.Errorf("response body missing [DONE] marker")
+		t.Error("response body missing [DONE] marker")
 	}
 }
 
 func TestProxy_Streaming_EmptyStream(t *testing.T) {
 	upstream := newMockUpstream(t)
-	upstream.streamChunks = []string{}
+	upstream.streamChunks = []openai.ChatCompletionChunk{}
 	defer upstream.Close()
 
 	proxy := newTestProxy(t, upstream.URL())
@@ -156,6 +164,51 @@ func TestProxy_Streaming_EmptyStream(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
+func TestProxy_Streaming_BlockDetection(t *testing.T) {
+	// Test that blocks are emitted correctly when chunk types change
+	upstream := newMockUpstream(t)
+	upstream.streamChunks = []openai.ChatCompletionChunk{
+		// Text block
+		{ID: "1", Model: "m", Object: "chat.completion.chunk",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{Index: 0, Delta: openai.ChatCompletionChunkChoiceDelta{Content: "text"}},
+			}},
+		// Tool call block
+		{ID: "1", Model: "m", Object: "chat.completion.chunk",
+			Choices: []openai.ChatCompletionChunkChoice{
+				{Index: 0, Delta: openai.ChatCompletionChunkChoiceDelta{
+					ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+						{Index: 0, ID: "call-id", Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{Name: "get_weather"}},
+					},
+				}},
+			}},
+	}
+	defer upstream.Close()
+
+	proxy := newTestProxy(t, upstream.URL())
+	defer proxy.Close()
+
+	body := `{"model":"test","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	resp, err := http.Post(proxy.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("proxy request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	// Verify both chunks arrive
+	responseBody, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(responseBody), "text") {
+		t.Error("text chunk missing")
+	}
+	if !strings.Contains(string(responseBody), "get_weather") {
+		t.Error("tool call chunk missing")
 	}
 }
 
@@ -198,7 +251,6 @@ func TestProxy_NonStreaming_StreamFalse(t *testing.T) {
 	proxy := newTestProxy(t, upstream.URL())
 	defer proxy.Close()
 
-	// stream: false explicitly
 	body := `{"model":"test","messages":[{"role":"user","content":"hi"}],"stream":false}`
 	resp, err := http.Post(proxy.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
 	if err != nil {
@@ -296,7 +348,7 @@ func TestProxy_EmptyBody(t *testing.T) {
 func TestProxy_UpstreamUnreachable(t *testing.T) {
 	cfg := &config.Config{
 		Port:           "0",
-		UpstreamURL:    "http://127.0.0.1:1", // invalid port, will fail to connect
+		UpstreamURL:    "http://127.0.0.1:1", // invalid port
 		UpstreamAPIKey: "sk-test",
 	}
 	handler := NewHandler(cfg, slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -345,7 +397,6 @@ func TestProxy_ForwardsResponseHeaders(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Content-Type should be forwarded from upstream
 	if ct := resp.Header.Get("Content-Type"); ct == "" {
 		t.Error("Content-Type header not forwarded from upstream")
 	}
@@ -355,9 +406,8 @@ func TestProxy_ForwardsResponseHeaders(t *testing.T) {
 
 func TestProxy_LargeNonStreamingResponse(t *testing.T) {
 	upstream := newMockUpstream(t)
-	// Create a large response body
 	largeContent := strings.Repeat("hello world ", 10000)
-	upstream.nonStreamBody = `{"id":"large","object":"chat.completion","choices":[{"message":{"content":"` + largeContent + `"}}]}`
+	upstream.nonStreamBody = `{"id":"large","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"` + largeContent + `"}}]}`
 	defer upstream.Close()
 
 	proxy := newTestProxy(t, upstream.URL())
@@ -391,7 +441,7 @@ func TestProxy_ForwardsAuthorization(t *testing.T) {
 		capturedAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"ok":true}`))
+		_, _ = w.Write([]byte(`{"id":"1","object":"chat.completion","choices":[{"message":{"content":"ok"}}]}`))
 	}))
 	defer upstream.Close()
 
@@ -418,5 +468,44 @@ func TestProxy_ForwardsAuthorization(t *testing.T) {
 	}
 	if capturedAuth != "Bearer sk-my-secret-key" {
 		t.Errorf("Authorization = %q, want %q", capturedAuth, "Bearer sk-my-secret-key")
+	}
+}
+
+// ── EchoModel test ─────────────────────────────────────────────────
+
+func TestEchoModel_EchoesLastUserMessage(t *testing.T) {
+	echo := &EchoModel{}
+	params := openai.ChatCompletionNewParams{
+		Model: "echo-model",
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.UserMessage("Hello, world!"),
+		},
+	}
+
+	completion, err := echo.Complete(context.TODO(), params)
+	if err != nil {
+		t.Fatalf("EchoModel.Complete() error = %v", err)
+	}
+	if completion.ID != "echo-1" {
+		t.Errorf("ID = %q, want %q", completion.ID, "echo-1")
+	}
+	if completion.Choices[0].Message.Content != "Hello, world!" {
+		t.Errorf("Content = %q, want %q", completion.Choices[0].Message.Content, "Hello, world!")
+	}
+}
+
+func TestEchoModel_EmptyMessages(t *testing.T) {
+	echo := &EchoModel{}
+	params := openai.ChatCompletionNewParams{
+		Model:    "echo-model",
+		Messages: []openai.ChatCompletionMessageParamUnion{},
+	}
+
+	completion, err := echo.Complete(context.TODO(), params)
+	if err != nil {
+		t.Fatalf("EchoModel.Complete() error = %v", err)
+	}
+	if completion.Choices[0].Message.Content != "echo" {
+		t.Errorf("Content = %q, want %q", completion.Choices[0].Message.Content, "echo")
 	}
 }

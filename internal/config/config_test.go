@@ -6,8 +6,8 @@ import (
 )
 
 func TestLoad_Valid(t *testing.T) {
-	t.Setenv("POLARIS_UPSTREAM_URL", "https://api.example.com")
-	t.Setenv("POLARIS_UPSTREAM_API_KEY", "sk-test-key")
+	t.Setenv("UPSTREAM_URL", "https://api.example.com")
+	t.Setenv("UPSTREAM_API_KEY", "sk-test-key")
 
 	cfg, err := Load()
 	if err != nil {
@@ -26,9 +26,9 @@ func TestLoad_Valid(t *testing.T) {
 }
 
 func TestLoad_CustomPort(t *testing.T) {
-	t.Setenv("POLARIS_UPSTREAM_URL", "https://api.example.com")
-	t.Setenv("POLARIS_UPSTREAM_API_KEY", "sk-key")
-	t.Setenv("POLARIS_PORT", "9999")
+	t.Setenv("UPSTREAM_URL", "https://api.example.com")
+	t.Setenv("UPSTREAM_API_KEY", "sk-key")
+	t.Setenv("PORT", "9999")
 
 	cfg, err := Load()
 	if err != nil {
@@ -41,28 +41,28 @@ func TestLoad_CustomPort(t *testing.T) {
 }
 
 func TestLoad_MissingUpstreamURL(t *testing.T) {
-	t.Setenv("POLARIS_UPSTREAM_URL", "")
-	t.Setenv("POLARIS_UPSTREAM_API_KEY", "sk-key")
+	t.Setenv("UPSTREAM_URL", "")
+	t.Setenv("UPSTREAM_API_KEY", "sk-key")
 
 	_, err := Load()
 	if err == nil {
-		t.Fatal("expected error for missing POLARIS_UPSTREAM_URL")
+		t.Fatal("expected error for missing UPSTREAM_URL")
 	}
 }
 
 func TestLoad_MissingUpstreamAPIKey(t *testing.T) {
-	t.Setenv("POLARIS_UPSTREAM_URL", "https://api.example.com")
-	t.Setenv("POLARIS_UPSTREAM_API_KEY", "")
+	t.Setenv("UPSTREAM_URL", "https://api.example.com")
+	t.Setenv("UPSTREAM_API_KEY", "")
 
 	_, err := Load()
 	if err == nil {
-		t.Fatal("expected error for missing POLARIS_UPSTREAM_API_KEY")
+		t.Fatal("expected error for missing UPSTREAM_API_KEY")
 	}
 }
 
 func TestLoad_MultipleMissing(t *testing.T) {
-	t.Setenv("POLARIS_UPSTREAM_URL", "")
-	t.Setenv("POLARIS_UPSTREAM_API_KEY", "")
+	t.Setenv("UPSTREAM_URL", "")
+	t.Setenv("UPSTREAM_API_KEY", "")
 
 	_, err := Load()
 	if err == nil {

@@ -2,7 +2,8 @@
 bin/
 .watch/
 
-# Environment
+# Environment (contains secrets)
+.env.local
 .env
 
 # IDE

@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PID_FILE="$SCRIPT_DIR/.watch/polaris.pid"
 LOG_FILE="$SCRIPT_DIR/.watch/polaris.log"
 
+source "$SCRIPT_DIR/build-env.sh"
+
 TEST_TIMEOUT=120
 STARTUP_DELAY=1
 RESTART_DELAY=0.3
@@ -23,14 +25,6 @@ _require_cmd() {
 
 _pid_running() {
     [[ -f "$1" ]] && kill -0 "$(cat "$1")" 2>/dev/null
-}
-
-_load_env() {
-    if [[ -f "$SCRIPT_DIR/.env" ]]; then
-        set -a
-        source "$SCRIPT_DIR/.env"
-        set +a
-    fi
 }
 
 # ── Guards ──────────────────────────────────────────────────────────
@@ -66,7 +60,7 @@ _do_start() {
 
     sleep "$STARTUP_DELAY"
     if _pid_running "$PID_FILE"; then
-        local port="${POLARIS_PORT:-8777}"
+        local port="${PORT:-8777}"
         echo "Polaris started on :$port (PID $(cat "$PID_FILE"))."
     else
         echo "✗ Polaris failed to start. Check $LOG_FILE"
@@ -96,7 +90,7 @@ _do_watch() {
     local server_pid=$!
     echo "$server_pid" > "$PID_FILE"
 
-    local port="${POLARIS_PORT:-8777}"
+    local port="${PORT:-8777}"
     echo "Polaris started on :$port (PID $server_pid)."
     echo "Watching for Go changes in $SCRIPT_DIR/ ..."
     echo ""
@@ -153,7 +147,8 @@ _do_doctor() {
     local failed=0
 
     echo "Polaris build environment:"
-    for cmd in go golangci-lint fswatch; do
+    echo ""
+    for cmd in go golangci-lint fswatch varlock; do
         if command -v "$cmd" &>/dev/null; then
             echo "  ✓ $cmd: $(command -v "$cmd")"
         else
@@ -162,6 +157,45 @@ _do_doctor() {
         fi
     done
 
+    echo ""
+
+    if [[ -f "$SCRIPT_DIR/.env.schema" ]]; then
+        local varlock_result
+        varlock_result="$(varlock load --path "$SCRIPT_DIR/" --format shell 2>&1)" || {
+            echo "  ✗ Varlock config invalid:"
+            echo "$varlock_result" | sed 's/^/    /'
+            failed=1
+        }
+        if [[ $failed -eq 0 ]]; then
+            echo "  ✓ Varlock config valid"
+
+            local upstream_url
+            upstream_url="$(varlock printenv UPSTREAM_URL --path "$SCRIPT_DIR/" 2>/dev/null)" || true
+            if [[ -n "$upstream_url" ]]; then
+                echo "  ✓ UPSTREAM_URL: $upstream_url"
+            else
+                echo "  ✗ UPSTREAM_URL missing"
+                failed=1
+            fi
+
+            local api_key
+            api_key="$(varlock printenv UPSTREAM_API_KEY --path "$SCRIPT_DIR/" 2>/dev/null)" || true
+            if [[ -n "$api_key" ]]; then
+                echo "  ✓ UPSTREAM_API_KEY configured"
+            else
+                echo "  ✗ UPSTREAM_API_KEY missing"
+                failed=1
+            fi
+
+            local port_val
+            port_val="$(varlock printenv PORT --path "$SCRIPT_DIR/" 2>/dev/null)" || true
+            echo "  ✓ PORT: ${port_val:-8777}"
+        fi
+    else
+        echo "  ✗ .env.schema missing"
+        failed=1
+    fi
+
     return "$failed"
 }
 
@@ -169,25 +203,30 @@ usage() {
     cat <<EOF
 Usage: ./build.sh <command>
   Local dev:
-    build        Compile Go binary
-    clean        Remove build artifacts (bin/, .watch/)
-    start        Build + start in background
-    stop         Stop server
-    watch        Start + auto-rebuild on Go changes
-    test [N]     Run all Go tests (timeout in seconds, default $TEST_TIMEOUT)
-    lint         Run golangci-lint
-    doctor       Check build prerequisites
+    build           Compile Go binary
+    clean           Remove build artifacts (bin/, .watch/)
+    start           Build + start in background
+    stop            Stop server
+    watch           Start + auto-rebuild on Go changes
+    test [N]        Run all Go tests (timeout in seconds, default $TEST_TIMEOUT)
+    lint            Run golangci-lint
+    doctor          Check build prerequisites and env config
+  Setup:
+    setup           Interactive setup wizard
+    upstream-setup  Configure upstream provider URL and API key
 EOF
 }
 
 case "${1:-}" in
-    build)      _do_build ;;
-    clean)      _do_clean ;;
-    start)      _do_start ;;
-    stop)       _do_stop ;;
-    watch)      _do_watch ;;
-    test)       shift; _do_test "$@";;
-    lint)       _do_lint ;;
-    doctor)     _do_doctor ;;
-    *)          usage ;;
+    build)          _do_build ;;
+    clean)          _do_clean ;;
+    start)          _do_start ;;
+    stop)           _do_stop ;;
+    watch)          _do_watch ;;
+    test)           shift; _do_test "$@";;
+    lint)           _do_lint ;;
+    doctor)         _do_doctor ;;
+    setup)          do_setup ;;
+    upstream-setup) do_upstream_setup ;;
+    *)              usage ;;
 esac

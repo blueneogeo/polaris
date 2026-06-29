@@ -1,5 +1,9 @@
 # Polaris
 
+<p align="center">
+  <img src="resources/polaris.jpg" alt="Polaris — the North Star" width="600">
+</p>
+
 Polaris is a co-programmer proxy that sits between you and an AI model. It steers the model toward correct, aligned responses by automating the manual correction loop you already perform: watching the output, hitting escape when it goes wrong, and telling the model to try again.
 
 Polaris acts as an OpenAI-compatible server. You connect your harness (OpenCode, or any OpenAI-compatible client) to Polaris, and Polaris proxies to one or more worker models. It uses its own model(s) to reason about quality, rules, and alignment.

@@ -4,6 +4,75 @@ Polaris is a co-programmer proxy that sits between you and an AI model. It steer
 
 Polaris acts as an OpenAI-compatible server. You connect your harness (OpenCode, or any OpenAI-compatible client) to Polaris, and Polaris proxies to one or more worker models. It uses its own model(s) to reason about quality, rules, and alignment.
 
+## Current status (v0.1)
+
+- **Transparent streaming proxy** — forwards chat completions to an upstream model, passes SSE chunks through via a typed block pipeline (text, tool_call, thinking).
+- **Extensible architecture** — `Validator`, `PromptEnhancer`, and `Model` interfaces are wired but act as no-ops. Ready for rules, memory, and LLM judging.
+- **Build tooling** — `./build.sh` with varlock-encrypted secrets (mirrors Turn project patterns).
+
+Not yet implemented: rules engine, LLM judging, memory, `@polaris` communication, OpenCode plugin.
+
+## Quick start
+
+**Prerequisites:** Go, golangci-lint, varlock, fswatch (for watch mode).
+
+```bash
+# Install prerequisites
+brew install go golangci-lint dmno-dev/tap/varlock fswatch
+
+# Configure upstream provider (URL + API key)
+./build.sh setup
+
+# Start the proxy
+./build.sh start
+```
+
+## build.sh commands
+
+| Command | Description |
+|---|---|
+| `./build.sh setup` | Interactive setup wizard — configures upstream provider URL and API key |
+| `./build.sh upstream-setup` | Just configure the upstream provider |
+| `./build.sh build` | Lint + compile Go binary to `bin/polaris` |
+| `./build.sh start` | Build + start server in background (requires env configured) |
+| `./build.sh stop` | Stop background server |
+| `./build.sh watch` | Start + auto-rebuild on `.go` file changes (requires fswatch) |
+| `./build.sh test` | Run all tests (`go test ./...`) |
+| `./build.sh lint` | Run `golangci-lint` |
+| `./build.sh doctor` | Check all prerequisites and env configuration |
+| `./build.sh clean` | Remove `bin/` and `.watch/` |
+
+### Environment variables
+
+Configured via `.env.local` using varlock. Schema defined in `.env.schema`:
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `PORT` | No | `8777` | HTTP server port |
+| `UPSTREAM_URL` | Yes | — | Upstream provider base URL (e.g. `https://api.openai.com`) |
+| `UPSTREAM_API_KEY` | Yes | — | API key for the upstream provider |
+
+### Connecting OpenCode
+
+Add a custom provider to your `opencode.json`:
+
+```json
+{
+  "provider": {
+    "polaris": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Polaris",
+      "options": { "baseURL": "http://localhost:8777/v1" },
+      "models": { "gpt-4o": { "name": "GPT-4o (via Polaris)" } }
+    }
+  }
+}
+```
+
+Then select **Polaris** as your provider in OpenCode.
+
+---
+
 ## What Polaris is
 
 - A **co-programmer**, not an agent harness. You stay in control. The model does the work. Polaris keeps it between the lines.
